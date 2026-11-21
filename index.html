@@ -1478,6 +1478,8 @@ function loadPeer() {
     next();
   });
 }
+const NETERR = ['network', 'server-error', 'socket-error', 'socket-closed'];   // falhas passageiras do servidor público: tenta de novo
+const coopSay = t => { const m = $('cMsg'); if (m) m.textContent = t; };
 const rand5 = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 5; i++) s += A[Math.random() * A.length | 0]; return s; };
 function coopPeerCommon(peer) {
   peer.on('call', call => { try { call.answer(COOP && COOP.mic ? COOP.mic : undefined); call.on('stream', coopPlay); } catch (e) {} });
@@ -1494,6 +1496,11 @@ function coopHostNet(onOpen, onFail, tries = 0) {
       if (me.fresh) me.code = rand5();   // sala nova: sorteia outro código; retomada: tenta o mesmo até o servidor liberar
       return setTimeout(() => !me.dead && coopHostNet(onOpen, onFail, tries + 1), me.fresh ? 100 : 2000);
     }
+    if (NETERR.includes(e.type) && tries < 8 && !me.started) {
+      try { peer.destroy(); } catch (x) {}
+      coopSay(`Servidor de conexão ocupado, tentando de novo (${tries + 1}/8)…`);
+      return setTimeout(() => !me.dead && coopHostNet(onOpen, onFail, tries + 1), 1500 + tries * 700);
+    }
     onFail && onFail(e);
   });
 }
@@ -1509,7 +1516,7 @@ function coopAccept(c) {           // o amigo conectou (primeira vez ou reconex�
   });
   c.on('data', coopRecv); c.on('close', () => coopLost(c)); c.on('error', () => coopLost(c));
 }
-function coopGuestNet(resume, fail) {
+function coopGuestNet(resume, fail, n = 0) {
   const me = COOP; if (!me || me.dead) return;
   const code = me.code; try { me.peer && me.peer.destroy(); } catch (e) {}
   const peer = new Peer(); me.peer = peer; coopPeerCommon(peer); let opened = false, done = false;
@@ -1524,7 +1531,11 @@ function coopGuestNet(resume, fail) {
     });
     c.on('data', coopRecv); c.on('close', () => coopLost(c)); c.on('error', () => coopLost(c));
   });
-  peer.on('error', e => { clearTimeout(to); if (!opened) retry(e.type === 'peer-unavailable' ? 'Sala não encontrada. Confira o código.' : 'Erro de conexão (' + e.type + ').'); });
+  peer.on('error', e => {
+    clearTimeout(to);
+    if (!opened && !done && NETERR.includes(e.type) && !resume && n < 6) { done = true; try { peer.destroy(); } catch (x) {} coopSay(`Servidor de conexão ocupado, tentando de novo (${n + 1}/6)…`); return setTimeout(() => !me.dead && coopGuestNet(resume, fail, n + 1), 1500 + n * 700); }
+    if (!opened) retry(e.type === 'peer-unavailable' ? 'Sala não encontrada. Confira o código.' : 'Erro de conexão (' + e.type + ').');
+  });
 }
 function coopHello() {
   if (!COOP || !COOP.tx) return;
@@ -1540,7 +1551,7 @@ async function coopHost(say) {
   coopHostNet(() => {
     $('cMsg').innerHTML = `Seu código: <b style="font-size:40px;letter-spacing:8px;color:#d9b44a">${COOP.code}</b><br><span style="font-size:15px;color:#9b8f83">Envie este código ao seu amigo e aguarde ele entrar…</span>`;
     $('cHost').disabled = true;
-  }, e => { say('Erro de conexão (' + e.type + '). Tente de novo.'); });
+  }, e => { say('Não consegui falar com o servidor de conexão (' + e.type + '). Aguarde alguns segundos e clique em Criar sala de novo; se continuar, desative bloqueadores de anúncio/VPN nesta página.'); $('cHost') && ($('cHost').disabled = false); coopLeave(true); });
 }
 async function coopJoin(code, say) {
   say('Conectando…');
